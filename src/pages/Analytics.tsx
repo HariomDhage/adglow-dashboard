@@ -64,40 +64,55 @@ const Analytics = () => {
   const totalClicks = campaigns.reduce((s, c) => s + Number(c.total_clicks || 0), 0);
   const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
 
-  const chartData = analyticsData.length > 0
-    ? analyticsData.map(a => ({
-        day: new Date(a.date).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-        impressions: Number(a.impressions || 0),
-        clicks: Number(a.clicks || 0),
-      }))
-    : Array.from({ length: Math.min(days, 30) }, (_, i) => ({
-        day: `Day ${i + 1}`,
-        impressions: 0,
-        clicks: 0,
-      }));
+  // Aggregate daily analytics across all campaigns
+  const chartData = (() => {
+    if (analyticsData.length === 0) {
+      return Array.from({ length: Math.min(days, 30) }, (_, i) => ({ day: `Day ${i + 1}`, impressions: 0, clicks: 0 }));
+    }
+    const dayMap = new Map<string, { impressions: number; clicks: number }>();
+    analyticsData.forEach(a => {
+      const key = a.date;
+      const prev = dayMap.get(key) || { impressions: 0, clicks: 0 };
+      dayMap.set(key, { impressions: prev.impressions + Number(a.impressions || 0), clicks: prev.clicks + Number(a.clicks || 0) });
+    });
+    return Array.from(dayMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, vals]) => ({ day: new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric' }), ...vals }));
+  })();
 
-  // Process breakdowns
-  const ageBreakdown = breakdowns.filter(b => b.breakdown_type === 'age');
-  const genderBreakdown = breakdowns.filter(b => b.breakdown_type === 'gender');
-  const deviceBreakdown = breakdowns.filter(b => b.breakdown_type === 'device');
+  // Aggregate breakdowns by value (sum across all campaigns)
+  const aggregate = (items: typeof breakdowns) => {
+    const map = new Map<string, number>();
+    items.forEach(b => map.set(b.breakdown_value, (map.get(b.breakdown_value) || 0) + Number(b.impressions || 0)));
+    return map;
+  };
 
-  const ageData = ageBreakdown.length > 0
-    ? ageBreakdown.map(b => ({ age: b.breakdown_value, value: Number(b.impressions || 0) }))
-    : [{ age: '18-24', value: 0 }, { age: '25-34', value: 0 }, { age: '35-44', value: 0 }, { age: '45-54', value: 0 }, { age: '55+', value: 0 }];
+  const ageMap = aggregate(breakdowns.filter(b => b.breakdown_type === 'age'));
+  const genderMap = aggregate(breakdowns.filter(b => b.breakdown_type === 'gender'));
+  const deviceMap = aggregate(breakdowns.filter(b => b.breakdown_type === 'device'));
+
+  const ageOrder = ['18-24', '25-34', '35-44', '45-54', '55+'];
+  const ageData = ageMap.size > 0
+    ? ageOrder.map(age => ({ age, value: ageMap.get(age) || 0 }))
+    : ageOrder.map(age => ({ age, value: 0 }));
 
   const ageTotal = ageData.reduce((s, d) => s + d.value, 0) || 1;
   const ageDataPercent = ageData.map(d => ({ ...d, value: Math.round((d.value / ageTotal) * 100) }));
 
-  const genderData = genderBreakdown.length > 0
-    ? genderBreakdown.map((b, i) => ({ name: b.breakdown_value, value: Number(b.impressions || 0), color: genderColors[i % 3] }))
-    : [{ name: 'Male', value: 0, color: '#FF6B6B' }, { name: 'Female', value: 0, color: '#FFC857' }, { name: 'Other', value: 0, color: '#FF8E53' }];
+  const genderColorMap: Record<string, string> = { Male: '#FF6B6B', Female: '#FFC857', Other: '#FF8E53' };
+  const genderOrder = ['Male', 'Female', 'Other'];
+  const genderData = genderMap.size > 0
+    ? genderOrder.map(name => ({ name, value: genderMap.get(name) || 0, color: genderColorMap[name] }))
+    : genderOrder.map(name => ({ name, value: 0, color: genderColorMap[name] }));
 
   const genderTotal = genderData.reduce((s, d) => s + d.value, 0) || 1;
   const genderDataPercent = genderData.map(d => ({ ...d, value: Math.round((d.value / genderTotal) * 100) || 0 }));
 
-  const deviceData = deviceBreakdown.length > 0
-    ? deviceBreakdown.map((b, i) => ({ name: b.breakdown_value, value: Number(b.impressions || 0), color: genderColors[i % 3] }))
-    : [{ name: 'Mobile', value: 0, color: '#FF6B6B' }, { name: 'Desktop', value: 0, color: '#FFC857' }, { name: 'Tablet', value: 0, color: '#FF8E53' }];
+  const deviceColorMap: Record<string, string> = { Mobile: '#FF6B6B', Desktop: '#FFC857', Tablet: '#FF8E53' };
+  const deviceOrder = ['Mobile', 'Desktop', 'Tablet'];
+  const deviceData = deviceMap.size > 0
+    ? deviceOrder.map(name => ({ name, value: deviceMap.get(name) || 0, color: deviceColorMap[name] }))
+    : deviceOrder.map(name => ({ name, value: 0, color: deviceColorMap[name] }));
 
   const deviceTotal = deviceData.reduce((s, d) => s + d.value, 0) || 1;
   const deviceDataPercent = deviceData.map(d => ({ ...d, value: Math.round((d.value / deviceTotal) * 100) || 0 }));
