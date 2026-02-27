@@ -58,7 +58,13 @@ const UploadVideo = () => {
     if (!f || !user) return;
     setFile(f);
     setUploading(true);
+    setUploaded(false);
     setProgress(0);
+
+    // Simulate progress while upload is in-flight
+    const interval = setInterval(() => {
+      setProgress(p => (p < 90 ? p + Math.random() * 10 : p));
+    }, 400);
 
     const filePath = `${user.id}/${Date.now()}_${f.name}`;
     const { error } = await supabase.storage
@@ -68,10 +74,13 @@ const UploadVideo = () => {
         upsert: false,
       });
 
+    clearInterval(interval);
+
     if (error) {
       toast.error('Upload failed: ' + error.message);
       setUploading(false);
       setFile(null);
+      setProgress(0);
       return;
     }
 
@@ -83,24 +92,8 @@ const UploadVideo = () => {
     toast.success('Video uploaded!');
   }, [user]);
 
-  const onDropWithProgress = useCallback(async (acceptedFiles: File[]) => {
-    const f = acceptedFiles[0];
-    if (!f) return;
-    setFile(f);
-    setUploading(true);
-    setProgress(0);
-
-    const interval = setInterval(() => {
-      setProgress(p => Math.min(p + Math.random() * 15, 90));
-    }, 300);
-
-    await onDrop(acceptedFiles);
-    clearInterval(interval);
-    setProgress(100);
-  }, [onDrop]);
-
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: onDropWithProgress,
+    onDrop,
     accept: { 'video/*': ['.mp4', '.mov', '.avi'] },
     maxFiles: 1,
     maxSize: 524288000,
