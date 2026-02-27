@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import PageTransition from '@/components/PageTransition';
 import GlassCard from '@/components/GlassCard';
 import { cn } from '@/lib/utils';
-import { Play, Pause, Copy, Trash2, Edit, Search, LayoutGrid, List, Loader2 } from 'lucide-react';
+import { Play, Pause, Copy, Trash2, Edit, Search, LayoutGrid, List, Loader2, X, Save } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
@@ -31,6 +31,9 @@ const Campaigns = () => {
   const [activeTab, setActiveTab] = useState('All');
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
+  const [editingCampaign, setEditingCampaign] = useState<typeof campaigns[0] | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', daily_budget: '', status: '', primary_text: '', headline: '' });
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
   const { data: campaigns = [], isLoading } = useQuery({
     queryKey: ['campaigns'],
@@ -108,6 +111,30 @@ const Campaigns = () => {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+
+  const updateCampaign = useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Record<string, unknown> }) => {
+      const { error } = await supabase.from('campaigns').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      toast.success('Campaign updated');
+      setEditingCampaign(null);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const openEdit = (campaign: typeof campaigns[0]) => {
+    setEditingCampaign(campaign);
+    setEditForm({
+      name: campaign.name,
+      daily_budget: String(campaign.daily_budget / 100),
+      status: campaign.status,
+      primary_text: campaign.primary_text || '',
+      headline: campaign.headline || '',
+    });
+  };
 
   const filtered = campaigns
     .filter(c => activeTab === 'All' || c.status === activeTab)
@@ -192,7 +219,12 @@ const Campaigns = () => {
                 </div>
 
                 <div className="flex gap-2">
-                  <motion.button whileTap={{ scale: 0.9 }} className="p-2 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all" title="Edit">
+                  <motion.button
+                    whileTap={{ scale: 0.9 }}
+                    onClick={() => openEdit(c)}
+                    className="p-2 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all"
+                    title="Edit"
+                  >
                     <Edit className="w-4 h-4 text-muted-foreground" />
                   </motion.button>
                   <motion.button
@@ -211,20 +243,113 @@ const Campaigns = () => {
                   >
                     <Copy className="w-4 h-4 text-muted-foreground" />
                   </motion.button>
-                  <motion.button
-                    whileTap={{ scale: 0.9 }}
-                    onClick={() => { if (confirm('Delete this campaign?')) deleteCampaign.mutate({ id: c.id, fbCampaignId: c.fb_campaign_id }); }}
-                    className="p-2 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-4 h-4 text-destructive" />
-                  </motion.button>
+                  {deleteConfirm === c.id ? (
+                    <div className="flex items-center gap-1">
+                      <motion.button
+                        initial={{ scale: 0.8 }} animate={{ scale: 1 }}
+                        onClick={() => { deleteCampaign.mutate({ id: c.id, fbCampaignId: c.fb_campaign_id }); setDeleteConfirm(null); }}
+                        className="px-2 py-1 rounded-lg bg-destructive/20 text-destructive text-xs font-medium hover:bg-destructive/30 transition-all"
+                      >
+                        Confirm
+                      </motion.button>
+                      <motion.button
+                        initial={{ scale: 0.8 }} animate={{ scale: 1 }}
+                        onClick={() => setDeleteConfirm(null)}
+                        className="p-1 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all"
+                      >
+                        <X className="w-3 h-3 text-muted-foreground" />
+                      </motion.button>
+                    </div>
+                  ) : (
+                    <motion.button
+                      whileTap={{ scale: 0.9 }}
+                      onClick={() => setDeleteConfirm(c.id)}
+                      className="p-2 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-4 h-4 text-destructive" />
+                    </motion.button>
+                  )}
                 </div>
               </GlassCard>
             </motion.div>
           ))}
         </div>
       )}
+      <AnimatePresence>
+        {editingCampaign && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => setEditingCampaign(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className="glass rounded-2xl p-6 w-full max-w-lg border border-[var(--glass-border)]"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold text-foreground">Edit Campaign</h2>
+                <button onClick={() => setEditingCampaign(null)} className="p-1 rounded-lg hover:bg-[var(--glass-bg-hover)] transition-all">
+                  <X className="w-5 h-5 text-muted-foreground" />
+                </button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">Campaign Name</label>
+                  <input className="glass-input w-full" value={editForm.name} onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))} />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-sm text-muted-foreground mb-1.5 block">Daily Budget ($)</label>
+                    <input className="glass-input w-full" type="number" min="1" value={editForm.daily_budget} onChange={e => setEditForm(f => ({ ...f, daily_budget: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="text-sm text-muted-foreground mb-1.5 block">Status</label>
+                    <select className="glass-input w-full" value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value }))}>
+                      <option>Active</option>
+                      <option>Paused</option>
+                      <option>Draft</option>
+                      <option>Completed</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">Headline</label>
+                  <input className="glass-input w-full" value={editForm.headline} onChange={e => setEditForm(f => ({ ...f, headline: e.target.value }))} />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground mb-1.5 block">Primary Text</label>
+                  <textarea className="glass-input w-full min-h-[80px] resize-none" value={editForm.primary_text} onChange={e => setEditForm(f => ({ ...f, primary_text: e.target.value }))} />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  disabled={updateCampaign.isPending}
+                  onClick={() => updateCampaign.mutate({
+                    id: editingCampaign.id,
+                    updates: {
+                      name: editForm.name,
+                      daily_budget: Math.round(Number(editForm.daily_budget) * 100),
+                      status: editForm.status,
+                      headline: editForm.headline,
+                      primary_text: editForm.primary_text,
+                    },
+                  })}
+                  className="btn-warm flex items-center gap-2 disabled:opacity-60"
+                >
+                  {updateCampaign.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save Changes
+                </motion.button>
+                <motion.button whileTap={{ scale: 0.97 }} onClick={() => setEditingCampaign(null)} className="btn-glass">
+                  Cancel
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </PageTransition>
   );
 };
