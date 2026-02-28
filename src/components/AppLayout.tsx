@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { useState, useRef, useEffect, Suspense } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useQuery } from '@tanstack/react-query';
 import AppSidebar from './AppSidebar';
@@ -8,10 +8,22 @@ import { Bell, Search, Rocket, AlertTriangle, BarChart3 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 
+const PageLoader = () => (
+  <div className="flex items-center justify-center py-24">
+    <div className="w-8 h-8 rounded-full border-2 border-t-transparent warm-gradient animate-spin" />
+  </div>
+);
+
 const AppLayout = () => {
   const { user } = useAuth();
   const [showNotifs, setShowNotifs] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+
+  // Scroll to top on every route change
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   const { data: campaigns = [] } = useQuery({
     queryKey: ['campaigns'],
@@ -128,14 +140,11 @@ const AppLayout = () => {
           </div>
         </header>
 
-        <motion.main
-          className="p-6"
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4 }}
-        >
-          <Outlet />
-        </motion.main>
+        <main className="p-6">
+          <Suspense fallback={<PageLoader />}>
+            <Outlet />
+          </Suspense>
+        </main>
       </div>
     </div>
   );

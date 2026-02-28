@@ -38,21 +38,20 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
-            <Suspense fallback={<PageLoader />}>
-              <Routes>
-                <Route path="/" element={<Landing />} />
-                <Route element={<ProtectedRoute />}>
-                  <Route element={<AppLayout />}>
-                    <Route path="/dashboard" element={<Dashboard />} />
-                    <Route path="/campaigns" element={<Campaigns />} />
-                    <Route path="/upload" element={<UploadVideo />} />
-                    <Route path="/analytics" element={<Analytics />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                  </Route>
+            <Routes>
+              {/* Landing gets its own Suspense so AppLayout is never unmounted by lazy loading */}
+              <Route path="/" element={<Suspense fallback={<PageLoader />}><Landing /></Suspense>} />
+              <Route element={<ProtectedRoute />}>
+                <Route element={<AppLayout />}>
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/campaigns" element={<Campaigns />} />
+                  <Route path="/upload" element={<UploadVideo />} />
+                  <Route path="/analytics" element={<Analytics />} />
+                  <Route path="/settings" element={<SettingsPage />} />
                 </Route>
-                <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
+              </Route>
+              <Route path="*" element={<Suspense fallback={<PageLoader />}><NotFound /></Suspense>} />
+            </Routes>
           </BrowserRouter>
         </TooltipProvider>
       </AuthProvider>
