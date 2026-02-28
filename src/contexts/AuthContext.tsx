@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 import type { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { Tables } from '@/lib/types';
+import { getAdAccounts, getPages } from '@/lib/facebook-api';
 
 interface FbConnection {
   access_token: string;
@@ -58,13 +59,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   // When user logs in via Facebook OAuth, Supabase stores the provider token.
-  // We capture it and save to fb_connections for Meta API calls.
+  // We capture it, save to fb_connections, and auto-fetch their first ad account + page.
   const saveFbToken = async (currentSession: Session) => {
     const providerToken = currentSession.provider_token;
     const userId = currentSession.user.id;
     const provider = currentSession.user.app_metadata?.provider;
 
     if (provider === 'facebook' && providerToken) {
+      // Save token first
       const { error } = await supabase
         .from('fb_connections')
         .upsert({
@@ -75,6 +77,30 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       if (!error) {
         setFbConnection({ access_token: providerToken, ad_account_id: null, page_id: null });
+
+        // Auto-fetch ad account + page and store them
+        try {
+          const [accounts, pages] = await Promise.all([
+            getAdAccounts(providerToken),
+            getPages(providerToken),
+          ]);
+          const adAccount = accounts[0];
+          const page = pages[0];
+          if (adAccount) {
+            await supabase.from('fb_connections').update({
+              ad_account_id: adAccount.account_id,
+              page_id: page?.id || null,
+              updated_at: new Date().toISOString(),
+            }).eq('user_id', userId);
+            setFbConnection({
+              access_token: providerToken,
+              ad_account_id: adAccount.account_id,
+              page_id: page?.id || null,
+            });
+          }
+        } catch {
+          // No ad account found — user may not have one, that's fine
+        }
       }
     }
   };

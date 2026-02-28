@@ -293,6 +293,32 @@ export async function getAccountInsightsTimeSeries(
   return data.data || [];
 }
 
+// ---------- Import Existing Campaigns ----------
+
+interface MetaCampaignRaw {
+  id: string;
+  name: string;
+  objective: string;
+  status: string;
+  daily_budget?: string;
+  insights?: { data: InsightRow[] };
+}
+
+export async function getAdAccountCampaigns(
+  adAccountId: string,
+  accessToken: string
+): Promise<MetaCampaignRaw[]> {
+  const params = new URLSearchParams({
+    fields: 'id,name,objective,status,daily_budget',
+    limit: '50',
+    access_token: accessToken,
+  });
+  const data = await metaFetch<{ data: MetaCampaignRaw[] }>(
+    `${META_API_BASE}/act_${adAccountId}/campaigns?${params}`
+  );
+  return data.data || [];
+}
+
 // ---------- Ad Account & Pages ----------
 
 interface AdAccount {
