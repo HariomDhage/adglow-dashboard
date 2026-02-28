@@ -3,11 +3,10 @@ import { motion } from 'framer-motion';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import PageTransition from '@/components/PageTransition';
 import GlassCard from '@/components/GlassCard';
-import { User, Bell, CreditCard, Link2, Loader2, Check, RefreshCw } from 'lucide-react';
+import { User, Bell, CreditCard, Link2, Loader2, Check } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
-import { getAdAccounts, getPages } from '@/lib/facebook-api';
 
 const SettingsPage = () => {
   const { user, profile, fbConnection } = useAuth();
@@ -16,7 +15,6 @@ const SettingsPage = () => {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [saving, setSaving] = useState(false);
-  const [fetchingAccounts, setFetchingAccounts] = useState(false);
 
   useEffect(() => {
     if (profile) {
@@ -82,49 +80,12 @@ const SettingsPage = () => {
       provider: 'facebook',
       options: {
         scopes: 'ads_management,ads_read,business_management,pages_read_engagement',
-        redirectTo: `${window.location.origin}/settings`,
+        redirectTo: `${window.location.origin}/dashboard`,
       },
     });
     if (error) toast.error(error.message);
   };
 
-  const handleFetchAdAccounts = async () => {
-    if (!fbConnection?.access_token) {
-      toast.error('No Facebook token available. Reconnect Facebook first.');
-      return;
-    }
-    setFetchingAccounts(true);
-    try {
-      const [accounts, pages] = await Promise.all([
-        getAdAccounts(fbConnection.access_token),
-        getPages(fbConnection.access_token),
-      ]);
-
-      if (accounts.length === 0) {
-        toast.error('No ad accounts found. Make sure your Facebook account has an ad account.');
-        setFetchingAccounts(false);
-        return;
-      }
-
-      const adAccount = accounts[0];
-      const page = pages[0];
-
-      await supabase
-        .from('fb_connections')
-        .update({
-          ad_account_id: adAccount.account_id,
-          page_id: page?.id || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', user!.id);
-
-      queryClient.invalidateQueries({ queryKey: ['fb-connection'] });
-      toast.success(`Linked ad account: ${adAccount.name}`);
-    } catch (err) {
-      toast.error(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    }
-    setFetchingAccounts(false);
-  };
 
   const initials = (fullName || email || 'U').charAt(0).toUpperCase();
   const notifItems = [
@@ -185,17 +146,6 @@ const SettingsPage = () => {
                 )}
               </div>
               <div className="flex gap-2 flex-wrap">
-                {fbConnectionData?.access_token && (
-                  <motion.button
-                    onClick={handleFetchAdAccounts}
-                    disabled={fetchingAccounts}
-                    whileTap={{ scale: 0.95 }}
-                    className="btn-glass text-sm flex items-center gap-2"
-                  >
-                    {fetchingAccounts ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Sync Accounts
-                  </motion.button>
-                )}
                 <motion.button onClick={handleConnectFacebook} whileTap={{ scale: 0.95 }} className="btn-warm text-sm flex items-center gap-2">
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M22.675 0H1.325C.593 0 0 .593 0 1.325v21.351C0 23.407.593 24 1.325 24H12.82v-9.294H9.692v-3.622h3.128V8.413c0-3.1 1.893-4.788 4.659-4.788 1.325 0 2.463.099 2.795.143v3.24l-1.918.001c-1.504 0-1.795.715-1.795 1.763v2.313h3.587l-.467 3.622h-3.12V24h6.116c.73 0 1.323-.593 1.323-1.325V1.325C24 .593 23.407 0 22.675 0z"/>
