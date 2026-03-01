@@ -26,7 +26,7 @@ const AppLayout = () => {
   }, [location.pathname]);
 
   const { data: campaigns = [] } = useQuery({
-    queryKey: ['campaigns'],
+    queryKey: ['campaigns-notifications'],
     queryFn: async () => {
       const { data } = await supabase
         .from('campaigns')

@@ -125,7 +125,7 @@ const SettingsPage = () => {
             if (insights.length > 0) {
               const row = insights[0];
               await supabase.from('campaigns').update({
-                total_spend: Math.round(Number(row.spend || 0) * 100),
+                total_spend: Number(row.spend || 0),
                 total_impressions: Number(row.impressions || 0),
                 total_clicks: Number(row.clicks || 0),
               }).eq('id', campaignId);
@@ -146,7 +146,7 @@ const SettingsPage = () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'facebook',
       options: {
-        scopes: 'ads_management,ads_read,business_management,pages_read_engagement',
+        scopes: 'ads_management,ads_read,business_management,pages_read_engagement,pages_show_list',
         redirectTo: `${window.location.origin}/dashboard`,
       },
     });
