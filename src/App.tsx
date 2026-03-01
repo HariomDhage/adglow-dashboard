@@ -13,12 +13,15 @@ import AppLayout from "./components/AppLayout";
 function lazyRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
   return lazy(() =>
     importFn().catch(() => {
-      // Chunk failed — likely a new deploy. Reload once.
       const key = 'chunk-reload';
       if (!sessionStorage.getItem(key)) {
         sessionStorage.setItem(key, '1');
         window.location.reload();
+        // Return a never-resolving promise so the spinner stays while the page reloads
+        return new Promise<{ default: React.ComponentType }>(() => {});
       }
+      // Already reloaded once — clear the flag and let it error naturally
+      sessionStorage.removeItem(key);
       return importFn();
     })
   );
