@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import * as tus from 'tus-js-client';
 import PageTransition from '@/components/PageTransition';
 import GlassCard from '@/components/GlassCard';
 import { CloudUpload, Check, Film, Rocket, Save, X, Loader2 } from 'lucide-react';
@@ -61,36 +62,60 @@ const UploadVideo = () => {
     setUploaded(false);
     setProgress(0);
 
-    // Simulate progress while upload is in-flight
-    const interval = setInterval(() => {
-      setProgress(p => (p < 90 ? p + Math.random() * 10 : p));
-    }, 400);
-
     const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const filePath = `${user.id}/${Date.now()}_${safeName}`;
-    const { error } = await supabase.storage
-      .from('videos')
-      .upload(filePath, f, {
-        cacheControl: '3600',
-        upsert: false,
-      });
 
-    clearInterval(interval);
-
-    if (error) {
-      toast.error('Upload failed: ' + error.message);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      toast.error('Not authenticated');
       setUploading(false);
       setFile(null);
-      setProgress(0);
       return;
     }
 
-    const { data: publicUrl } = supabase.storage.from('videos').getPublicUrl(filePath);
-    setVideoUrl(publicUrl.publicUrl);
-    setProgress(100);
-    setUploading(false);
-    setUploaded(true);
-    toast.success('Video uploaded!');
+    const projectId = import.meta.env.VITE_SUPABASE_URL.replace('https://', '').replace('.supabase.co', '');
+
+    const upload = new tus.Upload(f, {
+      endpoint: `https://${projectId}.supabase.co/storage/v1/upload/resumable`,
+      retryDelays: [0, 3000, 5000, 10000, 20000],
+      headers: {
+        authorization: `Bearer ${session.access_token}`,
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+      },
+      uploadDataDuringCreation: true,
+      removeFingerprintOnSuccess: true,
+      metadata: {
+        bucketName: 'videos',
+        objectName: filePath,
+        contentType: f.type,
+        cacheControl: '3600',
+      },
+      chunkSize: 6 * 1024 * 1024,
+      onError(error) {
+        toast.error('Upload failed: ' + error.message);
+        setUploading(false);
+        setFile(null);
+        setProgress(0);
+      },
+      onProgress(bytesUploaded, bytesTotal) {
+        setProgress(Math.round((bytesUploaded / bytesTotal) * 100));
+      },
+      onSuccess() {
+        const { data: publicUrl } = supabase.storage.from('videos').getPublicUrl(filePath);
+        setVideoUrl(publicUrl.publicUrl);
+        setProgress(100);
+        setUploading(false);
+        setUploaded(true);
+        toast.success('Video uploaded!');
+      },
+    });
+
+    upload.findPreviousUploads().then((previousUploads) => {
+      if (previousUploads.length) {
+        upload.resumeFromPreviousUpload(previousUploads[0]);
+      }
+      upload.start();
+    });
   }, [user]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
