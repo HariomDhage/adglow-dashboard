@@ -40,17 +40,21 @@ const Dashboard = () => {
     enabled: !!user,
   });
 
+  const campaignIds = campaigns.map(c => c.id);
+
   const { data: analyticsData = [] } = useQuery({
-    queryKey: ['dashboard-analytics'],
+    queryKey: ['dashboard-analytics', campaignIds],
     queryFn: async () => {
+      if (campaignIds.length === 0) return [];
       const { data } = await supabase
         .from('campaign_analytics')
         .select('*')
+        .in('campaign_id', campaignIds)
         .order('date', { ascending: true })
         .limit(30);
       return data || [];
     },
-    enabled: !!user,
+    enabled: !!user && campaignIds.length > 0,
   });
 
   const totalSpend = campaigns.reduce((sum, c) => sum + Number(c.total_spend || 0), 0);
@@ -65,7 +69,12 @@ const Dashboard = () => {
         impressions: Number(a.impressions || 0),
         clicks: Number(a.clicks || 0),
       }))
-    : [{ name: 'No data', impressions: 0, clicks: 0 }];
+    : [];
+
+  // Build sparklines from last 7 analytics entries
+  const spendSpark = analyticsData.slice(-7).map(a => Number(a.spend || 0));
+  const impSpark = analyticsData.slice(-7).map(a => Number(a.impressions || 0));
+  const clickSpark = analyticsData.slice(-7).map(a => Number(a.clicks || 0));
 
   return (
     <PageTransition>
@@ -77,30 +86,36 @@ const Dashboard = () => {
       </motion.div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Total Spend" value={totalSpend} prefix="$" change={0} icon={<DollarSign className="w-5 h-5 text-foreground" />} index={0} sparkline={[0]} />
-        <StatCard label="Impressions" value={totalImpressions} change={0} icon={<Eye className="w-5 h-5 text-foreground" />} index={1} sparkline={[0]} />
-        <StatCard label="Total Clicks" value={totalClicks} change={0} icon={<MousePointerClick className="w-5 h-5 text-foreground" />} index={2} sparkline={[0]} />
-        <StatCard label="Active Campaigns" value={activeCampaigns} change={0} icon={<Rocket className="w-5 h-5 text-foreground" />} index={3} sparkline={[0]} />
+        <StatCard label="Total Spend" value={totalSpend} prefix="$" icon={<DollarSign className="w-5 h-5 text-foreground" />} index={0} sparkline={spendSpark.length > 0 ? spendSpark : undefined} />
+        <StatCard label="Impressions" value={totalImpressions} icon={<Eye className="w-5 h-5 text-foreground" />} index={1} sparkline={impSpark.length > 0 ? impSpark : undefined} />
+        <StatCard label="Total Clicks" value={totalClicks} icon={<MousePointerClick className="w-5 h-5 text-foreground" />} index={2} sparkline={clickSpark.length > 0 ? clickSpark : undefined} />
+        <StatCard label="Active Campaigns" value={activeCampaigns} icon={<Rocket className="w-5 h-5 text-foreground" />} index={3} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
         <GlassCard hoverable={false} className="lg:col-span-2 p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">Performance Overview</h3>
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="warmGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#FF6B6B" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#FF6B6B" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="name" stroke="#A0AEC0" fontSize={12} tickLine={false} axisLine={false} />
-              <YAxis stroke="#A0AEC0" fontSize={12} tickLine={false} axisLine={false} />
-              <Tooltip contentStyle={{ background: 'rgba(15,15,26,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', backdropFilter: 'blur(12px)', color: '#fff' }} />
-              <Area type="monotone" dataKey="impressions" stroke="#FF6B6B" fill="url(#warmGradient)" strokeWidth={2} />
-              <Area type="monotone" dataKey="clicks" stroke="#FFC857" fill="none" strokeWidth={2} strokeDasharray="5 5" />
-            </AreaChart>
-          </ResponsiveContainer>
+          {chartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="warmGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#FF6B6B" stopOpacity={0.3} />
+                    <stop offset="100%" stopColor="#FF6B6B" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="name" stroke="#A0AEC0" fontSize={12} tickLine={false} axisLine={false} />
+                <YAxis stroke="#A0AEC0" fontSize={12} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: 'rgba(15,15,26,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', backdropFilter: 'blur(12px)', color: '#fff' }} />
+                <Area type="monotone" dataKey="impressions" stroke="#FF6B6B" fill="url(#warmGradient)" strokeWidth={2} />
+                <Area type="monotone" dataKey="clicks" stroke="#FFC857" fill="none" strokeWidth={2} strokeDasharray="5 5" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex items-center justify-center h-[260px] text-muted-foreground">
+              <p>No analytics data yet. Launch a campaign to see performance here.</p>
+            </div>
+          )}
         </GlassCard>
 
         <Link to="/upload">
@@ -141,10 +156,10 @@ const Dashboard = () => {
                   <motion.tr key={c.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 * i }} className="border-b last:border-b-0 hover:bg-[var(--glass-bg-hover)] transition-all" style={{ borderColor: 'var(--glass-border)' }}>
                     <td className="py-3 text-sm font-medium text-foreground">{c.name}</td>
                     <td className="py-3"><span className={cn('text-xs px-2.5 py-1 rounded-full font-medium', statusColors[c.status] || 'bg-slate-500/20 text-slate-400')}>{c.status}</span></td>
-                    <td className="py-3 text-sm font-data text-muted-foreground">${(c.daily_budget / 100).toFixed(0)}/day</td>
+                    <td className="py-3 text-sm font-data text-muted-foreground">${((c.daily_budget || 0) / 100).toFixed(0)}/day</td>
                     <td className="py-3 text-sm font-data text-muted-foreground">{formatNum(Number(c.total_impressions || 0))}</td>
                     <td className="py-3 text-sm font-data text-muted-foreground">{formatNum(Number(c.total_clicks || 0))}</td>
-                    <td className="py-3 text-sm font-data text-muted-foreground">{Number(c.ctr || 0).toFixed(1)}%</td>
+                    <td className="py-3 text-sm font-data text-muted-foreground">{Number(c.total_impressions || 0) > 0 ? ((Number(c.total_clicks || 0) / Number(c.total_impressions || 1)) * 100).toFixed(1) : '0.0'}%</td>
                   </motion.tr>
                 ))}
               </tbody>

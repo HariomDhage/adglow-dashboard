@@ -77,7 +77,7 @@ const StatCard = ({ label, value, prefix = '', suffix = '', change, icon, index 
                 key={i}
                 className="flex-1 rounded-sm warm-gradient opacity-60"
                 initial={{ height: 0 }}
-                animate={isInView ? { height: `${(v / Math.max(...sparkline)) * 100}%` } : {}}
+                animate={isInView ? { height: `${(v / (Math.max(...sparkline) || 1)) * 100}%` } : {}}
                 transition={{ duration: 0.5, delay: index * 0.1 + i * 0.05 }}
               />
             ))}

@@ -8,6 +8,19 @@ interface MetaApiError {
 
 async function metaFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);
+  if (!res.ok) {
+    const text = await res.text();
+    try {
+      const data = JSON.parse(text);
+      if (data.error) {
+        const err = data.error as MetaApiError;
+        throw new Error(`Meta API Error: ${err.message} (code: ${err.code})`);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('Meta API')) throw e;
+    }
+    throw new Error(`Meta API request failed (HTTP ${res.status})`);
+  }
   const data = await res.json();
   if (data.error) {
     const err = data.error as MetaApiError;

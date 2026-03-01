@@ -66,14 +66,16 @@ const Analytics = () => {
 
   // Aggregate daily analytics across all campaigns
   const chartData = (() => {
-    if (analyticsData.length === 0) {
-      return Array.from({ length: Math.min(days, 30) }, (_, i) => ({ day: `Day ${i + 1}`, impressions: 0, clicks: 0 }));
-    }
-    const dayMap = new Map<string, { impressions: number; clicks: number }>();
+    if (analyticsData.length === 0) return [];
+    const dayMap = new Map<string, { impressions: number; clicks: number; spend: number }>();
     analyticsData.forEach(a => {
       const key = a.date;
-      const prev = dayMap.get(key) || { impressions: 0, clicks: 0 };
-      dayMap.set(key, { impressions: prev.impressions + Number(a.impressions || 0), clicks: prev.clicks + Number(a.clicks || 0) });
+      const prev = dayMap.get(key) || { impressions: 0, clicks: 0, spend: 0 };
+      dayMap.set(key, {
+        impressions: prev.impressions + Number(a.impressions || 0),
+        clicks: prev.clicks + Number(a.clicks || 0),
+        spend: prev.spend + Number(a.spend || 0),
+      });
     });
     return Array.from(dayMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
@@ -143,6 +145,12 @@ const Analytics = () => {
 
       {isLoading ? (
         <div className="flex justify-center py-16"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></div>
+      ) : campaigns.length === 0 ? (
+        <GlassCard hoverable={false} className="p-12 text-center">
+          <Target className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <h3 className="text-lg font-semibold text-foreground mb-2">No campaigns yet</h3>
+          <p className="text-muted-foreground">Create your first campaign to see analytics data here.</p>
+        </GlassCard>
       ) : (
         <>
           <GlassCard hoverable={false} className="p-6 mb-8">

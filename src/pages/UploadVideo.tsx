@@ -225,7 +225,7 @@ const UploadVideo = () => {
     }
     setLaunching(true);
 
-    const campaignId = await saveCampaign(fbConnection?.ad_account_id ? 'Draft' : 'Active');
+    const campaignId = await saveCampaign('Draft');
     if (!campaignId) {
       setLaunching(false);
       return;
