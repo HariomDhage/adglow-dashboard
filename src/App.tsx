@@ -9,14 +9,28 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import ProtectedRoute from "./components/ProtectedRoute";
 import AppLayout from "./components/AppLayout";
 
-// Lazy-load pages for code splitting
-const Landing = lazy(() => import("./pages/Landing"));
-const Dashboard = lazy(() => import("./pages/Dashboard"));
-const Campaigns = lazy(() => import("./pages/Campaigns"));
-const UploadVideo = lazy(() => import("./pages/UploadVideo"));
-const Analytics = lazy(() => import("./pages/Analytics"));
-const SettingsPage = lazy(() => import("./pages/SettingsPage"));
-const NotFound = lazy(() => import("./pages/NotFound"));
+// Auto-retry dynamic imports on chunk load failure (new deploys invalidate old chunks)
+function lazyRetry(importFn: () => Promise<{ default: React.ComponentType }>) {
+  return lazy(() =>
+    importFn().catch(() => {
+      // Chunk failed — likely a new deploy. Reload once.
+      const key = 'chunk-reload';
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1');
+        window.location.reload();
+      }
+      return importFn();
+    })
+  );
+}
+
+const Landing = lazyRetry(() => import("./pages/Landing"));
+const Dashboard = lazyRetry(() => import("./pages/Dashboard"));
+const Campaigns = lazyRetry(() => import("./pages/Campaigns"));
+const UploadVideo = lazyRetry(() => import("./pages/UploadVideo"));
+const Analytics = lazyRetry(() => import("./pages/Analytics"));
+const SettingsPage = lazyRetry(() => import("./pages/SettingsPage"));
+const NotFound = lazyRetry(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
