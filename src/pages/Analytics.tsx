@@ -1,26 +1,29 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import PageTransition from '@/components/PageTransition';
 import StatCard from '@/components/StatCard';
 import GlassCard from '@/components/GlassCard';
 import { cn } from '@/lib/utils';
-import { DollarSign, Eye, MousePointerClick, Target, Users, Monitor, Smartphone, Loader2, Download } from 'lucide-react';
+import { DollarSign, Eye, MousePointerClick, Target, Users, Monitor, Smartphone, Loader2, Download, RefreshCw } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell } from 'recharts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
+import { getCampaignDailyInsights, getCampaignBreakdownInsights } from '@/lib/facebook-api';
 
 const dateRanges = ['Today', '7D', '30D', '90D'];
 
-const genderColors = ['#FF6B6B', '#FFC857', '#FF8E53'];
-
 const Analytics = () => {
-  const { user } = useAuth();
+  const { user, fbConnection } = useAuth();
+  const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState('30D');
+  const [syncing, setSyncing] = useState(false);
 
   const daysMap: Record<string, number> = { Today: 1, '7D': 7, '30D': 30, '90D': 90 };
   const days = daysMap[dateRange] || 30;
 
+  // First fetch user's campaigns to get IDs for filtering
   const { data: campaigns = [] } = useQuery({
     queryKey: ['campaigns'],
     queryFn: async () => {
@@ -30,38 +33,47 @@ const Analytics = () => {
     enabled: !!user,
   });
 
+  const campaignIds = campaigns.map(c => c.id);
+
+  // Filter analytics by user's campaigns
   const { data: analyticsData = [], isLoading } = useQuery({
-    queryKey: ['analytics', dateRange],
+    queryKey: ['analytics', dateRange, campaignIds],
     queryFn: async () => {
+      if (campaignIds.length === 0) return [];
       const since = new Date();
       since.setDate(since.getDate() - days);
       const { data } = await supabase
         .from('campaign_analytics')
         .select('*')
+        .in('campaign_id', campaignIds)
         .gte('date', since.toISOString().split('T')[0])
         .order('date', { ascending: true });
       return data || [];
     },
-    enabled: !!user,
+    enabled: !!user && campaignIds.length > 0,
   });
 
+  // Filter breakdowns by user's campaigns
   const { data: breakdowns = [] } = useQuery({
-    queryKey: ['breakdowns', dateRange],
+    queryKey: ['breakdowns', dateRange, campaignIds],
     queryFn: async () => {
+      if (campaignIds.length === 0) return [];
       const since = new Date();
       since.setDate(since.getDate() - days);
       const { data } = await supabase
         .from('audience_breakdowns')
         .select('*')
+        .in('campaign_id', campaignIds)
         .gte('date', since.toISOString().split('T')[0]);
       return data || [];
     },
-    enabled: !!user,
+    enabled: !!user && campaignIds.length > 0,
   });
 
-  const totalSpend = campaigns.reduce((s, c) => s + Number(c.total_spend || 0), 0);
-  const totalImpressions = campaigns.reduce((s, c) => s + Number(c.total_impressions || 0), 0);
-  const totalClicks = campaigns.reduce((s, c) => s + Number(c.total_clicks || 0), 0);
+  // Compute stats from filtered analytics data (not campaign lifetime totals)
+  const totalSpend = analyticsData.reduce((s, a) => s + Number(a.spend || 0), 0);
+  const totalImpressions = analyticsData.reduce((s, a) => s + Number(a.impressions || 0), 0);
+  const totalClicks = analyticsData.reduce((s, a) => s + Number(a.clicks || 0), 0);
   const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
 
   // Aggregate daily analytics across all campaigns
@@ -135,6 +147,123 @@ const Analytics = () => {
     URL.revokeObjectURL(url);
   };
 
+  // Sync analytics from Meta for all campaigns with a fb_campaign_id
+  const handleSyncFromMeta = async () => {
+    if (!fbConnection?.access_token || !fbConnection.ad_account_id) {
+      toast.error('No Facebook connection. Connect in Settings first.');
+      return;
+    }
+
+    // Check token expiry
+    if (fbConnection.token_expires_at && new Date(fbConnection.token_expires_at) < new Date()) {
+      toast.error('Facebook token expired. Reconnect in Settings.');
+      return;
+    }
+
+    const metaCampaigns = campaigns.filter(c => c.fb_campaign_id);
+    if (metaCampaigns.length === 0) {
+      toast.info('No campaigns linked to Meta. Launch a campaign first.');
+      return;
+    }
+
+    setSyncing(true);
+    let synced = 0;
+
+    for (const campaign of metaCampaigns) {
+      try {
+        // Fetch daily insights
+        const dailyInsights = await getCampaignDailyInsights(
+          campaign.fb_campaign_id!,
+          fbConnection.access_token,
+          days
+        );
+
+        // Upsert daily analytics
+        for (const row of dailyInsights) {
+          const date = row.date_start || '';
+          if (!date) continue;
+          await supabase.from('campaign_analytics').upsert({
+            campaign_id: campaign.id,
+            date,
+            impressions: Number(row.impressions || 0),
+            clicks: Number(row.clicks || 0),
+            spend: Number(row.spend || 0),
+            ctr: Number(row.ctr || 0),
+            cpc: Number(row.cpc || 0),
+            cpm: Number(row.cpm || 0),
+            reach: Number(row.reach || 0),
+          }, { onConflict: 'campaign_id,date' });
+        }
+
+        // Update campaign totals
+        if (dailyInsights.length > 0) {
+          const totSpend = dailyInsights.reduce((s, r) => s + Number(r.spend || 0), 0);
+          const totImpressions = dailyInsights.reduce((s, r) => s + Number(r.impressions || 0), 0);
+          const totClicks = dailyInsights.reduce((s, r) => s + Number(r.clicks || 0), 0);
+          await supabase.from('campaigns').update({
+            total_spend: totSpend,
+            total_impressions: totImpressions,
+            total_clicks: totClicks,
+          }).eq('id', campaign.id);
+        }
+
+        // Fetch audience breakdowns
+        for (const breakdownType of ['age', 'gender', 'device_platform'] as const) {
+          try {
+            const breakdownData = await getCampaignBreakdownInsights(
+              campaign.fb_campaign_id!,
+              breakdownType,
+              fbConnection.access_token,
+              days
+            );
+            const dbType = breakdownType === 'device_platform' ? 'device' : breakdownType;
+            for (const row of breakdownData) {
+              const date = row.date_start || '';
+              const value = breakdownType === 'age' ? row.age
+                : breakdownType === 'gender' ? (row.gender === '1' ? 'Male' : row.gender === '2' ? 'Female' : 'Other')
+                : row.device_platform || 'Unknown';
+              if (!date || !value) continue;
+
+              // Map device_platform values
+              const displayValue = breakdownType === 'device_platform'
+                ? (value === 'mobile_app' || value === 'mobile_web' ? 'Mobile'
+                  : value === 'desktop' ? 'Desktop'
+                  : 'Tablet')
+                : (breakdownType === 'gender'
+                  ? (value === '1' ? 'Male' : value === '2' ? 'Female' : 'Other')
+                  : value);
+
+              await supabase.from('audience_breakdowns').upsert({
+                campaign_id: campaign.id,
+                date,
+                breakdown_type: dbType,
+                breakdown_value: displayValue,
+                impressions: Number(row.impressions || 0),
+                clicks: Number(row.clicks || 0),
+                spend: Number(row.spend || 0),
+              }, { onConflict: 'campaign_id,date,breakdown_type,breakdown_value' });
+            }
+          } catch {
+            // Some breakdowns may not be available
+          }
+        }
+
+        synced++;
+      } catch (err) {
+        console.error(`Failed to sync campaign ${campaign.name}:`, err);
+      }
+    }
+
+    // Refresh queries
+    queryClient.invalidateQueries({ queryKey: ['analytics'] });
+    queryClient.invalidateQueries({ queryKey: ['breakdowns'] });
+    queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-analytics'] });
+
+    setSyncing(false);
+    toast.success(`Synced analytics for ${synced}/${metaCampaigns.length} campaigns from Meta.`);
+  };
+
   return (
     <PageTransition>
       <div className="flex items-center justify-between mb-8">
@@ -143,6 +272,13 @@ const Analytics = () => {
           <p className="text-muted-foreground mt-1">Deep dive into your campaign performance.</p>
         </div>
         <div className="flex gap-2">
+          {fbConnection?.ad_account_id && (
+            <motion.button whileTap={{ scale: syncing ? 1 : 0.95 }} onClick={handleSyncFromMeta} disabled={syncing}
+              className="btn-glass flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium disabled:opacity-60">
+              {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Sync from Meta
+            </motion.button>
+          )}
           {chartData.length > 0 && (
             <motion.button whileTap={{ scale: 0.95 }} onClick={exportCSV}
               className="btn-glass flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium">
@@ -159,10 +295,10 @@ const Analytics = () => {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <StatCard label="Total Spend" value={totalSpend} prefix="$" change={0} icon={<DollarSign className="w-5 h-5 text-foreground" />} index={0} />
-        <StatCard label="Impressions" value={totalImpressions} change={0} icon={<Eye className="w-5 h-5 text-foreground" />} index={1} />
-        <StatCard label="Clicks" value={totalClicks} change={0} icon={<MousePointerClick className="w-5 h-5 text-foreground" />} index={2} />
-        <StatCard label="CTR" value={Number(avgCtr.toFixed(1))} suffix="%" change={0} icon={<Target className="w-5 h-5 text-foreground" />} index={3} />
+        <StatCard label="Total Spend" value={totalSpend} prefix="$" icon={<DollarSign className="w-5 h-5 text-foreground" />} index={0} />
+        <StatCard label="Impressions" value={totalImpressions} icon={<Eye className="w-5 h-5 text-foreground" />} index={1} />
+        <StatCard label="Clicks" value={totalClicks} icon={<MousePointerClick className="w-5 h-5 text-foreground" />} index={2} />
+        <StatCard label="CTR" value={Number(avgCtr.toFixed(1))} suffix="%" icon={<Target className="w-5 h-5 text-foreground" />} index={3} />
       </div>
 
       {isLoading ? (
@@ -177,25 +313,36 @@ const Analytics = () => {
         <>
           <GlassCard hoverable={false} className="p-6 mb-8">
             <h3 className="text-lg font-semibold text-foreground mb-4">Performance Trend</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="coralGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#FF6B6B" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#FF6B6B" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#FFC857" stopOpacity={0.2} />
-                    <stop offset="100%" stopColor="#FFC857" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="day" stroke="#A0AEC0" fontSize={11} tickLine={false} axisLine={false} interval={4} />
-                <YAxis stroke="#A0AEC0" fontSize={11} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ background: 'rgba(15,15,26,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }} />
-                <Area type="monotone" dataKey="impressions" stroke="#FF6B6B" fill="url(#coralGrad)" strokeWidth={2} />
-                <Area type="monotone" dataKey="clicks" stroke="#FFC857" fill="url(#goldGrad)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+            {chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="coralGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#FF6B6B" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#FF6B6B" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#FFC857" stopOpacity={0.2} />
+                      <stop offset="100%" stopColor="#FFC857" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="day" stroke="#A0AEC0" fontSize={11} tickLine={false} axisLine={false} interval={4} />
+                  <YAxis stroke="#A0AEC0" fontSize={11} tickLine={false} axisLine={false} />
+                  <Tooltip contentStyle={{ background: 'rgba(15,15,26,0.9)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', color: '#fff' }} />
+                  <Area type="monotone" dataKey="impressions" stroke="#FF6B6B" fill="url(#coralGrad)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="clicks" stroke="#FFC857" fill="url(#goldGrad)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-[300px] text-muted-foreground">
+                <div className="text-center">
+                  <p>No analytics data for this period.</p>
+                  {fbConnection?.ad_account_id && (
+                    <p className="text-sm mt-1">Click "Sync from Meta" to pull real data.</p>
+                  )}
+                </div>
+              </div>
+            )}
           </GlassCard>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

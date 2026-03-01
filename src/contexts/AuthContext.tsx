@@ -8,6 +8,7 @@ interface FbConnection {
   access_token: string;
   ad_account_id: string | null;
   page_id: string | null;
+  token_expires_at: string | null;
 }
 
 interface AuthContextType {
@@ -20,6 +21,7 @@ interface AuthContextType {
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signInWithFacebook: () => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  refreshFbConnection: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -48,7 +50,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const { data } = await supabase
         .from('fb_connections')
-        .select('access_token, ad_account_id, page_id')
+        .select('access_token, ad_account_id, page_id, token_expires_at')
         .eq('user_id', userId)
         .single();
       if (data) setFbConnection(data);
@@ -57,31 +59,60 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  // Exchange short-lived token for long-lived token via edge function
+  const exchangeForLongLivedToken = async (shortLivedToken: string): Promise<string | null> => {
+    try {
+      const { data, error } = await supabase.functions.invoke('exchange-fb-token', {
+        body: { short_lived_token: shortLivedToken },
+      });
+      if (error) {
+        console.error('Token exchange error:', error);
+        return null;
+      }
+      if (data?.access_token) {
+        return data.access_token;
+      }
+      return null;
+    } catch (err) {
+      console.error('Token exchange failed:', err);
+      return null;
+    }
+  };
+
   // When user logs in via Facebook OAuth, Supabase stores the provider token.
-  // We capture it, save to fb_connections, and auto-fetch their first ad account + page.
+  // We capture it, exchange for a long-lived token, save to fb_connections,
+  // and auto-fetch their first ad account + page.
   const saveFbToken = async (currentSession: Session) => {
     const providerToken = currentSession.provider_token;
     const userId = currentSession.user.id;
     const provider = currentSession.user.app_metadata?.provider;
 
     if (provider === 'facebook' && providerToken) {
-      // Save token first
+      // Exchange for long-lived token (60 days instead of ~1 hour)
+      const longLivedToken = await exchangeForLongLivedToken(providerToken);
+      const tokenToSave = longLivedToken || providerToken;
+      const expiresAt = longLivedToken
+        ? new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString() // 60 days
+        : new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour fallback
+
+      // Save token
       const { error } = await supabase
         .from('fb_connections')
         .upsert({
           user_id: userId,
-          access_token: providerToken,
+          access_token: tokenToSave,
+          token_expires_at: expiresAt,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' });
 
       if (!error) {
-        setFbConnection({ access_token: providerToken, ad_account_id: null, page_id: null });
+        setFbConnection({ access_token: tokenToSave, ad_account_id: null, page_id: null, token_expires_at: expiresAt });
 
         // Auto-fetch ad account + page and store them
         try {
           const [accounts, pages] = await Promise.all([
-            getAdAccounts(providerToken),
-            getPages(providerToken),
+            getAdAccounts(tokenToSave),
+            getPages(tokenToSave),
           ]);
           const adAccount = accounts[0];
           const page = pages[0];
@@ -92,13 +123,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               updated_at: new Date().toISOString(),
             }).eq('user_id', userId);
             setFbConnection({
-              access_token: providerToken,
+              access_token: tokenToSave,
               ad_account_id: adAccount.account_id,
               page_id: page?.id || null,
+              token_expires_at: expiresAt,
             });
           }
         } catch {
-          // No ad account found — user may not have one, that's fine
+          // No ad account found — user may not have one
         }
       }
     }
@@ -152,7 +184,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'facebook',
       options: {
-        scopes: 'ads_management,ads_read,business_management,pages_read_engagement',
+        scopes: 'ads_management,ads_read,business_management,pages_read_engagement,pages_show_list',
         redirectTo: `${window.location.origin}/dashboard`,
       },
     });
@@ -167,8 +199,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setFbConnection(null);
   };
 
+  const refreshFbConnection = async () => {
+    if (user) await fetchFbConnection(user.id);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, session, profile, fbConnection, loading, signIn, signUp, signInWithFacebook, signOut }}>
+    <AuthContext.Provider value={{ user, session, profile, fbConnection, loading, signIn, signUp, signInWithFacebook, signOut, refreshFbConnection }}>
       {children}
     </AuthContext.Provider>
   );

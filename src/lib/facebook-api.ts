@@ -46,6 +46,32 @@ export async function uploadVideoToMeta(
   );
 }
 
+// Poll video status until ready (Meta needs time to process uploaded videos)
+export async function waitForVideoReady(
+  videoId: string,
+  accessToken: string,
+  maxAttempts = 30
+): Promise<boolean> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const params = new URLSearchParams({
+      fields: 'status',
+      access_token: accessToken,
+    });
+    try {
+      const data = await metaFetch<{ status: { video_status: string } }>(
+        `${META_API_BASE}/${videoId}?${params}`
+      );
+      const status = data.status?.video_status;
+      if (status === 'ready') return true;
+      if (status === 'error') return false;
+    } catch {
+      // Video might not be queryable yet, keep retrying
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  return false;
+}
+
 // ---------- Campaign Creation ----------
 
 interface CreateCampaignParams {
@@ -64,7 +90,8 @@ export async function createCampaign(
     name: params.name,
     objective: params.objective,
     status: params.status || 'PAUSED',
-    special_ad_categories: JSON.stringify(params.specialAdCategories || ['NONE']),
+    // Empty array = no special categories. ['NONE'] is invalid since API v9.0
+    special_ad_categories: JSON.stringify(params.specialAdCategories || []),
     access_token: accessToken,
   });
 
@@ -137,22 +164,28 @@ export async function createAdCreative(
   params: CreateCreativeParams,
   accessToken: string
 ): Promise<{ id: string }> {
-  const objectStorySpec: Record<string, unknown> = {
-    page_id: params.pageId,
-    video_data: {
-      video_id: params.videoId,
-      message: params.message,
-      title: params.headline || '',
-      call_to_action: {
-        type: params.ctaType || 'LEARN_MORE',
-        value: { link: params.linkUrl || '' },
-      },
-    },
+  const videoData: Record<string, unknown> = {
+    video_id: params.videoId,
+    message: params.message,
+    title: params.headline || '',
   };
 
-  if (params.imageHash) {
-    (objectStorySpec.video_data as Record<string, unknown>).image_hash = params.imageHash;
+  // Only include CTA if a link URL is provided (Meta requires a valid URL)
+  if (params.linkUrl) {
+    videoData.call_to_action = {
+      type: params.ctaType || 'LEARN_MORE',
+      value: { link: params.linkUrl },
+    };
   }
+
+  if (params.imageHash) {
+    videoData.image_hash = params.imageHash;
+  }
+
+  const objectStorySpec = {
+    page_id: params.pageId,
+    video_data: videoData,
+  };
 
   const body = new URLSearchParams({
     name: params.name,
@@ -204,6 +237,34 @@ export async function updateCampaignStatus(
   );
 }
 
+export async function updateCampaignOnMeta(
+  campaignId: string,
+  updates: { name?: string; status?: string },
+  accessToken: string
+): Promise<{ success: boolean }> {
+  const body = new URLSearchParams({ access_token: accessToken });
+  if (updates.name) body.set('name', updates.name);
+  if (updates.status) body.set('status', updates.status);
+  return metaFetch<{ success: boolean }>(
+    `${META_API_BASE}/${campaignId}`,
+    { method: 'POST', body }
+  );
+}
+
+export async function updateAdSetOnMeta(
+  adsetId: string,
+  updates: { daily_budget?: number; status?: string },
+  accessToken: string
+): Promise<{ success: boolean }> {
+  const body = new URLSearchParams({ access_token: accessToken });
+  if (updates.daily_budget !== undefined) body.set('daily_budget', String(updates.daily_budget));
+  if (updates.status) body.set('status', updates.status);
+  return metaFetch<{ success: boolean }>(
+    `${META_API_BASE}/${adsetId}`,
+    { method: 'POST', body }
+  );
+}
+
 export async function updateAdSetStatus(
   adsetId: string,
   status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED',
@@ -229,7 +290,7 @@ export async function deleteCampaign(
 
 // ---------- Insights / Analytics ----------
 
-interface InsightRow {
+export interface InsightRow {
   campaign_id?: string;
   campaign_name?: string;
   impressions?: string;
@@ -242,6 +303,10 @@ interface InsightRow {
   actions?: Array<{ action_type: string; value: string }>;
   date_start?: string;
   date_stop?: string;
+  // Breakdown fields
+  age?: string;
+  gender?: string;
+  device_platform?: string;
 }
 
 interface InsightsResponse {
@@ -257,6 +322,47 @@ export async function getCampaignInsights(
   const params = new URLSearchParams({
     fields: 'campaign_name,impressions,clicks,spend,ctr,cpc,cpm,reach',
     date_preset: datePreset,
+    access_token: accessToken,
+  });
+
+  const data = await metaFetch<InsightsResponse>(
+    `${META_API_BASE}/${campaignId}/insights?${params}`
+  );
+  return data.data || [];
+}
+
+// Fetch daily time-series insights for a campaign
+export async function getCampaignDailyInsights(
+  campaignId: string,
+  accessToken: string,
+  days = 30
+): Promise<InsightRow[]> {
+  const preset = days <= 7 ? 'last_7d' : days <= 30 ? 'last_30d' : 'last_90d';
+  const params = new URLSearchParams({
+    fields: 'impressions,clicks,spend,ctr,cpc,cpm,reach',
+    time_increment: '1',
+    date_preset: preset,
+    access_token: accessToken,
+  });
+
+  const data = await metaFetch<InsightsResponse>(
+    `${META_API_BASE}/${campaignId}/insights?${params}`
+  );
+  return data.data || [];
+}
+
+// Fetch insights with audience breakdowns
+export async function getCampaignBreakdownInsights(
+  campaignId: string,
+  breakdownType: 'age' | 'gender' | 'device_platform',
+  accessToken: string,
+  days = 30
+): Promise<InsightRow[]> {
+  const preset = days <= 7 ? 'last_7d' : days <= 30 ? 'last_30d' : 'last_90d';
+  const params = new URLSearchParams({
+    fields: 'impressions,clicks,spend',
+    breakdowns: breakdownType,
+    date_preset: preset,
     access_token: accessToken,
   });
 

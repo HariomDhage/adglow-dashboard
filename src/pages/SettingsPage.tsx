@@ -7,7 +7,7 @@ import { User, Bell, CreditCard, Link2, Loader2, Check, Download } from 'lucide-
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
-import { getAdAccountCampaigns, getCampaignInsights } from '@/lib/facebook-api';
+import { getAdAccountCampaigns, getCampaignInsights, getCampaignDailyInsights } from '@/lib/facebook-api';
 
 const SettingsPage = () => {
   const { user, profile, fbConnection } = useAuth();
@@ -206,6 +206,17 @@ const SettingsPage = () => {
                     )}
                     {fbConnectionData.page_id && (
                       <p className="text-xs text-muted-foreground">Page ID: {fbConnectionData.page_id}</p>
+                    )}
+                    {!fbConnectionData.page_id && fbConnectionData.ad_account_id && (
+                      <p className="text-xs text-amber-400">No Page linked. Reconnect to grant page access (required for ads).</p>
+                    )}
+                    {fbConnectionData.token_expires_at && (
+                      <p className="text-xs text-muted-foreground">
+                        Token expires: {new Date(fbConnectionData.token_expires_at).toLocaleDateString()}
+                        {new Date(fbConnectionData.token_expires_at) < new Date() && (
+                          <span className="text-red-400 ml-1">(Expired - reconnect required)</span>
+                        )}
+                      </p>
                     )}
                   </div>
                 ) : (

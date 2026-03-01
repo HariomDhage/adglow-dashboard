@@ -6,12 +6,13 @@ import { useQueryClient } from '@tanstack/react-query';
 import * as tus from 'tus-js-client';
 import PageTransition from '@/components/PageTransition';
 import GlassCard from '@/components/GlassCard';
-import { CloudUpload, Check, Film, Rocket, Save, X, Loader2 } from 'lucide-react';
+import { CloudUpload, Check, Film, Rocket, Save, X, Loader2, Link as LinkIcon } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import {
   uploadVideoToMeta,
+  waitForVideoReady,
   createCampaign as createMetaCampaign,
   createAdSet,
   createAdCreative,
@@ -43,6 +44,7 @@ const UploadVideo = () => {
   const [progress, setProgress] = useState(0);
   const [videoUrl, setVideoUrl] = useState('');
   const [launching, setLaunching] = useState(false);
+  const [launchStep, setLaunchStep] = useState('');
   const [savingDraft, setSavingDraft] = useState(false);
 
   // Form state
@@ -52,6 +54,7 @@ const UploadVideo = () => {
   const [cta, setCta] = useState('Learn More');
   const [primaryText, setPrimaryText] = useState('');
   const [headline, setHeadline] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
   const [locations, setLocations] = useState('');
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -130,54 +133,80 @@ const UploadVideo = () => {
 
     const token = fbConnection.access_token;
     const adAccountId = fbConnection.ad_account_id;
-    const pageId = fbConnection.page_id || '';
+    const pageId = fbConnection.page_id;
+
+    if (!pageId) {
+      toast.error('No Facebook Page connected. Go to Settings to reconnect Facebook with page access.');
+      return false;
+    }
 
     try {
-      toast.info('Uploading video to Meta...');
+      // Step 1: Upload video to Meta
+      setLaunchStep('Uploading video to Meta...');
       const metaVideo = await uploadVideoToMeta(adAccountId, file, token);
 
-      toast.info('Creating Meta campaign...');
+      // Step 2: Wait for video to be ready
+      setLaunchStep('Processing video on Meta...');
+      const videoReady = await waitForVideoReady(metaVideo.id, token, 30);
+      if (!videoReady) {
+        toast.warning('Video still processing on Meta. Campaign created but ad may take a few minutes to appear.');
+      }
+
+      // Step 3: Create campaign
+      setLaunchStep('Creating campaign...');
       const metaCampaign = await createMetaCampaign(adAccountId, {
         name: campaignName,
         objective: objectiveMap[objective] || 'OUTCOME_TRAFFIC',
         status: 'PAUSED',
       }, token);
 
+      // Step 4: Create ad set
+      setLaunchStep('Creating ad set...');
+      const countryCodes = locations.split(',').map(l => l.trim().toUpperCase()).filter(Boolean);
       const metaAdSet = await createAdSet(adAccountId, {
         campaignId: metaCampaign.id,
         name: `${campaignName} - Ad Set`,
         dailyBudget: Math.round(Number(dailyBudget) * 100),
         targeting: {
           geo_locations: {
-            countries: locations.split(',').map(l => l.trim()).filter(Boolean),
+            countries: countryCodes.length > 0 ? countryCodes : ['US'],
           },
         },
         status: 'PAUSED',
       }, token);
 
+      // Step 5: Create ad creative
+      setLaunchStep('Creating ad creative...');
       const metaCreative = await createAdCreative(adAccountId, {
         name: `${campaignName} - Creative`,
         pageId,
         videoId: metaVideo.id,
-        message: primaryText,
-        headline,
-        ctaType: ctaMap[cta] || 'LEARN_MORE',
+        message: primaryText || campaignName,
+        headline: headline || campaignName,
+        linkUrl: linkUrl || undefined,
+        ctaType: linkUrl ? (ctaMap[cta] || 'LEARN_MORE') : undefined,
       }, token);
 
-      await createAd(adAccountId, metaAdSet.id, metaCreative.id, `${campaignName} - Ad`, token, 'ACTIVE');
+      // Step 6: Create ad
+      setLaunchStep('Creating ad...');
+      const metaAd = await createAd(adAccountId, metaAdSet.id, metaCreative.id, `${campaignName} - Ad`, token, 'PAUSED');
 
+      // Step 7: Update Supabase with Meta IDs
       await supabase.from('campaigns').update({
         fb_campaign_id: metaCampaign.id,
         fb_adset_id: metaAdSet.id,
         fb_creative_id: metaCreative.id,
         fb_video_id: metaVideo.id,
-        status: 'Active',
+        fb_ad_id: metaAd.id,
+        status: 'Paused',
+        link_url: linkUrl || null,
       }).eq('id', supabaseCampaignId);
 
       return true;
     } catch (err) {
       console.error('Meta API error:', err);
-      toast.error(`Meta API: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      toast.error(`Meta API failed at "${launchStep}": ${message}`);
       return false;
     }
   };
@@ -191,7 +220,7 @@ const UploadVideo = () => {
 
     const targetingJson = {
       geo_locations: {
-        countries: locations.split(',').map(l => l.trim()).filter(Boolean),
+        countries: locations.split(',').map(l => l.trim().toUpperCase()).filter(Boolean),
       },
     };
 
@@ -207,6 +236,7 @@ const UploadVideo = () => {
       cta: ctaMap[cta] || 'LEARN_MORE',
       video_url: videoUrl,
       video_filename: file?.name || null,
+      link_url: linkUrl || null,
     }).select('id').single();
 
     if (error) {
@@ -223,26 +253,42 @@ const UploadVideo = () => {
       toast.error('Please upload a video first');
       return;
     }
+    if (!campaignName.trim()) {
+      toast.error('Campaign name is required');
+      return;
+    }
+
+    // Validate Meta connection
+    if (fbConnection?.access_token && fbConnection.ad_account_id) {
+      if (!fbConnection.page_id) {
+        toast.error('No Facebook Page linked. Reconnect Facebook in Settings to grant page access.');
+        return;
+      }
+    }
+
     setLaunching(true);
+    setLaunchStep('Saving campaign...');
 
     const campaignId = await saveCampaign('Draft');
     if (!campaignId) {
       setLaunching(false);
+      setLaunchStep('');
       return;
     }
 
     if (fbConnection?.access_token && fbConnection.ad_account_id) {
       const metaOk = await launchToMeta(campaignId);
       if (!metaOk) {
-        toast.warning('Saved locally but Meta launch failed. You can retry from Campaigns.');
+        toast.warning('Saved locally but Meta launch failed. Check the error and retry from Campaigns.');
       } else {
-        toast.success('Campaign launched on Meta!');
+        toast.success('Campaign created on Meta! Go to Campaigns to activate it.');
       }
     } else {
       toast.success('Campaign saved! Connect Facebook in Settings to publish to Meta.');
     }
 
     setLaunching(false);
+    setLaunchStep('');
     navigate('/campaigns');
   };
 
@@ -257,6 +303,7 @@ const UploadVideo = () => {
   };
 
   const hasFbConnection = !!fbConnection?.ad_account_id;
+  const hasPage = !!fbConnection?.page_id;
 
   return (
     <PageTransition>
@@ -268,6 +315,15 @@ const UploadVideo = () => {
           <p className="text-sm text-amber-400">
             No Facebook Ad Account connected. Campaigns will be saved locally. Connect your Facebook account in{' '}
             <a href="/settings" className="underline font-medium">Settings</a> to publish to Meta.
+          </p>
+        </div>
+      )}
+
+      {hasFbConnection && !hasPage && (
+        <div className="glass rounded-xl p-4 mb-6 border border-amber-500/20 bg-amber-500/5">
+          <p className="text-sm text-amber-400">
+            Ad account connected but no Facebook Page linked. Reconnect in{' '}
+            <a href="/settings" className="underline font-medium">Settings</a> to grant page access (required for creating ads).
           </p>
         </div>
       )}
@@ -353,6 +409,13 @@ const UploadVideo = () => {
             </select>
           </div>
           <div className="md:col-span-2">
+            <label className="text-sm text-muted-foreground mb-1.5 block flex items-center gap-1.5">
+              <LinkIcon className="w-3.5 h-3.5" /> Destination URL
+            </label>
+            <input className="glass-input" type="url" placeholder="https://your-website.com/landing-page" value={linkUrl} onChange={e => setLinkUrl(e.target.value)} />
+            <p className="text-xs text-muted-foreground mt-1">Where users go when they click your ad. Required for CTA buttons.</p>
+          </div>
+          <div className="md:col-span-2">
             <label className="text-sm text-muted-foreground mb-1.5 block">Primary Text</label>
             <textarea className="glass-input min-h-[80px] resize-none" placeholder="Write your ad copy..." value={primaryText} onChange={e => setPrimaryText(e.target.value)} />
           </div>
@@ -375,7 +438,7 @@ const UploadVideo = () => {
             className="btn-warm flex items-center gap-2 disabled:opacity-60"
           >
             {launching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
-            {hasFbConnection ? 'Launch on Meta' : 'Launch Campaign'}
+            {launching ? launchStep : (hasFbConnection ? 'Launch on Meta' : 'Launch Campaign')}
           </motion.button>
           <motion.button
             onClick={handleSaveDraft}
