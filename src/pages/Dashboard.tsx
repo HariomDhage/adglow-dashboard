@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import PageTransition from '@/components/PageTransition';
 import StatCard from '@/components/StatCard';
 import GlassCard from '@/components/GlassCard';
-import { DollarSign, Eye, MousePointerClick, Rocket, Upload } from 'lucide-react';
+import { DollarSign, Eye, MousePointerClick, Rocket, Upload, TrendingUp, AlertTriangle, CheckCircle } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
@@ -92,6 +92,31 @@ const Dashboard = () => {
         <StatCard label="Active Campaigns" value={activeCampaigns} icon={<Rocket className="w-5 h-5 text-foreground" />} index={3} />
       </div>
 
+      {campaigns.length > 0 && (
+        <GlassCard hoverable={false} className="p-4 mb-8 border border-emerald-500/10 bg-emerald-500/5">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <TrendingUp className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">Performance Insight</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {(() => {
+                  const avgCtr = totalImpressions > 0 ? (totalClicks / totalImpressions) * 100 : 0;
+                  const topCampaign = [...campaigns].sort((a, b) => {
+                    const ctrA = Number(a.total_impressions || 0) > 0 ? Number(a.total_clicks || 0) / Number(a.total_impressions || 1) : 0;
+                    const ctrB = Number(b.total_impressions || 0) > 0 ? Number(b.total_clicks || 0) / Number(b.total_impressions || 1) : 0;
+                    return ctrB - ctrA;
+                  })[0];
+                  const topCtr = Number(topCampaign.total_impressions || 0) > 0 ? ((Number(topCampaign.total_clicks || 0) / Number(topCampaign.total_impressions || 1)) * 100).toFixed(1) : '0';
+                  return `Your overall CTR is ${avgCtr.toFixed(1)}%. Top performer: "${topCampaign.name}" with ${topCtr}% CTR. Total reach: ${formatNum(totalImpressions)} impressions across ${campaigns.length} campaigns.`;
+                })()}
+              </p>
+            </div>
+          </div>
+        </GlassCard>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
         <GlassCard hoverable={false} className="lg:col-span-2 p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">Performance Overview</h3>
@@ -145,6 +170,7 @@ const Dashboard = () => {
                 <tr className="text-left text-sm text-muted-foreground border-b" style={{ borderColor: 'var(--glass-border)' }}>
                   <th className="pb-3 font-medium">Campaign</th>
                   <th className="pb-3 font-medium">Status</th>
+                  <th className="pb-3 font-medium">Health</th>
                   <th className="pb-3 font-medium">Budget</th>
                   <th className="pb-3 font-medium">Impressions</th>
                   <th className="pb-3 font-medium">Clicks</th>
@@ -156,6 +182,14 @@ const Dashboard = () => {
                   <motion.tr key={c.id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 * i }} className="border-b last:border-b-0 hover:bg-[var(--glass-bg-hover)] transition-all" style={{ borderColor: 'var(--glass-border)' }}>
                     <td className="py-3 text-sm font-medium text-foreground">{c.name}</td>
                     <td className="py-3"><span className={cn('text-xs px-2.5 py-1 rounded-full font-medium', statusColors[c.status] || 'bg-slate-500/20 text-slate-400')}>{c.status}</span></td>
+                    <td className="py-3">
+                      {(() => {
+                        const ctr = Number(c.total_impressions || 0) > 0 ? (Number(c.total_clicks || 0) / Number(c.total_impressions || 1)) * 100 : 0;
+                        if (ctr >= 2) return <span className="flex items-center gap-1 text-xs text-emerald-400"><CheckCircle className="w-3.5 h-3.5" /> Great</span>;
+                        if (ctr >= 1) return <span className="flex items-center gap-1 text-xs text-amber-400"><TrendingUp className="w-3.5 h-3.5" /> Good</span>;
+                        return <span className="flex items-center gap-1 text-xs text-red-400"><AlertTriangle className="w-3.5 h-3.5" /> Low</span>;
+                      })()}
+                    </td>
                     <td className="py-3 text-sm font-data text-muted-foreground">${((c.daily_budget || 0) / 100).toFixed(0)}/day</td>
                     <td className="py-3 text-sm font-data text-muted-foreground">{formatNum(Number(c.total_impressions || 0))}</td>
                     <td className="py-3 text-sm font-data text-muted-foreground">{formatNum(Number(c.total_clicks || 0))}</td>

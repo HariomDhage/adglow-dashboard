@@ -5,7 +5,7 @@ import PageTransition from '@/components/PageTransition';
 import StatCard from '@/components/StatCard';
 import GlassCard from '@/components/GlassCard';
 import { cn } from '@/lib/utils';
-import { DollarSign, Eye, MousePointerClick, Target, Users, Monitor, Smartphone, Loader2 } from 'lucide-react';
+import { DollarSign, Eye, MousePointerClick, Target, Users, Monitor, Smartphone, Loader2, Download } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell } from 'recharts';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -119,6 +119,22 @@ const Analytics = () => {
   const deviceTotal = deviceData.reduce((s, d) => s + d.value, 0) || 1;
   const deviceDataPercent = deviceData.map(d => ({ ...d, value: Math.round((d.value / deviceTotal) * 100) || 0 }));
 
+  const exportCSV = () => {
+    if (chartData.length === 0) return;
+    const header = 'Date,Impressions,Clicks,Spend,CTR\n';
+    const rows = chartData.map(d => {
+      const ctr = d.impressions > 0 ? ((d.clicks / d.impressions) * 100).toFixed(2) : '0';
+      return `${d.day},${d.impressions},${d.clicks},${d.spend.toFixed(2)},${ctr}%`;
+    }).join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `analytics-${dateRange}-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <PageTransition>
       <div className="flex items-center justify-between mb-8">
@@ -127,6 +143,12 @@ const Analytics = () => {
           <p className="text-muted-foreground mt-1">Deep dive into your campaign performance.</p>
         </div>
         <div className="flex gap-2">
+          {chartData.length > 0 && (
+            <motion.button whileTap={{ scale: 0.95 }} onClick={exportCSV}
+              className="btn-glass flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium">
+              <Download className="w-4 h-4" /> Export CSV
+            </motion.button>
+          )}
           {dateRanges.map(range => (
             <motion.button key={range} whileTap={{ scale: 0.95 }} onClick={() => setDateRange(range)}
               className={cn('px-4 py-2 rounded-xl text-sm font-medium transition-all', dateRange === range ? 'warm-gradient text-foreground' : 'glass text-muted-foreground')}>
