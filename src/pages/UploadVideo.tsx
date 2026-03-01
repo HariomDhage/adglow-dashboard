@@ -66,7 +66,8 @@ const UploadVideo = () => {
       setProgress(p => (p < 90 ? p + Math.random() * 10 : p));
     }, 400);
 
-    const filePath = `${user.id}/${Date.now()}_${f.name}`;
+    const safeName = f.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = `${user.id}/${Date.now()}_${safeName}`;
     const { error } = await supabase.storage
       .from('videos')
       .upload(filePath, f, {
