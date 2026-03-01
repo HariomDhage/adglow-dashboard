@@ -140,6 +140,12 @@ const UploadVideo = () => {
       return false;
     }
 
+    // Check token expiry
+    if (fbConnection.token_expires_at && new Date(fbConnection.token_expires_at) < new Date()) {
+      toast.error('Facebook token expired. Go to Settings and reconnect Facebook.');
+      return false;
+    }
+
     try {
       // Step 1: Upload video to Meta
       setLaunchStep('Uploading video to Meta...');

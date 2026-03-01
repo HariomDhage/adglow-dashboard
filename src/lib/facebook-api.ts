@@ -1,4 +1,5 @@
 const META_API_BASE = 'https://graph.facebook.com/v25.0';
+const META_VIDEO_API_BASE = 'https://graph-video.facebook.com/v25.0';
 
 interface MetaApiError {
   message: string;
@@ -40,8 +41,9 @@ export async function uploadVideoToMeta(
   formData.append('file', file);
   formData.append('access_token', accessToken);
 
+  // Use graph-video.facebook.com for video uploads (optimized for large files)
   return metaFetch<{ id: string }>(
-    `${META_API_BASE}/act_${adAccountId}/advideos`,
+    `${META_VIDEO_API_BASE}/act_${adAccountId}/advideos`,
     { method: 'POST', body: formData }
   );
 }
